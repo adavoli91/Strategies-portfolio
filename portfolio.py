@@ -123,7 +123,7 @@ class Portfolio:
         self.date_end = filter_date[1].strftime('%Y-%m-%d')
 
     def _plot_preferences(self):
-        self.agg_month = st.sidebar.radio(label = 'Aggregate plot by month:', options = ['No', 'Yes'], horizontal = True)
+        self.agg_month = st.sidebar.radio(label = 'Aggregate data by month:', options = ['No', 'Yes'], horizontal = True)
 
     def _read_strats(self):
         '''
