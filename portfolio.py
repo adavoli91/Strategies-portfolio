@@ -12,10 +12,15 @@ dict_margin = {'AD': 3000, 'BP': 3000, 'C': 2000, 'CD': 3000, 'CL': 18000, 'EC':
 
 class Portfolio:
     def __init__(self):
+        # self.list_strategies = [i for i in os.listdir('./reports/') if '.txt' in i]
         self.list_strategies = st.file_uploader('Upload strategies', accept_multiple_files = True, type = ['csv', 'txt'])
-        self.data = {strat.name: pd.read_csv(strat).values for strat in self.list_strategies}
-        self.list_strategies = [strat.name for strat in self.list_strategies]
-        self.dict_margin = {}
+        if (type(self.list_strategies) == list) and (len(self.list_strategies) > 0):
+            self.data = {}
+            for strat in self.list_strategies:
+                data = pd.read_csv(strat, delimiter = ' ', header = None).values
+                self.data[strat.name] = data
+            self.list_strategies = [strat.name for strat in self.list_strategies]
+            self.dict_margin = {}
 
     def _compute_np_dd(self, daily_profit: np.array) -> tuple[np.array, np.array, np.array]:
         '''
@@ -129,7 +134,6 @@ class Portfolio:
             instrument = strat.split('_')[0]
             # get data
             data = self.data[strat]
-            data = np.array([i.split(' ') for i in data])
             # get strategy parameters
             dates = pd.to_datetime(data[:, 0], format = '%d/%m/%Y')
             daily_profit = data[:, 1].astype(float)
