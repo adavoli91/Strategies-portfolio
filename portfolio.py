@@ -1,8 +1,6 @@
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
-import os
 import datetime
 import plotly.graph_objects as go
 from sklearn.linear_model import LinearRegression
