@@ -12,8 +12,8 @@ dict_margin = {'AD': 3000, 'BP': 3000, 'C': 2000, 'CD': 3000, 'CL': 18000, 'EC':
 
 class Portfolio:
     def __init__(self):
-        # self.list_strategies = [i for i in os.listdir('./reports/') if '.txt' in i]
         self.list_strategies = st.file_uploader('Upload strategies', accept_multiple_files = True, type = ['csv', 'txt'])
+        self.data = {strat.name: pd.read_csv(strat).values for strat in self.list_strategies}
         self.list_strategies = [strat.name for strat in self.list_strategies]
         self.dict_margin = {}
 
@@ -34,8 +34,6 @@ class Portfolio:
         dd = cum_profit - max_equity
         #
         return cum_profit, max_equity, dd
-    
-    
 
     def _correlation_classic(self, data_1: np.array, data_2: np.array) -> float:
         '''
@@ -129,9 +127,8 @@ class Portfolio:
         dict_results = {}
         for strat in self.dict_strat.keys():
             instrument = strat.split('_')[0]
-            # read data
-            with open(f'./reports/{strat}') as f:
-                data = f.readlines()
+            # get data
+            data = self.data[strat]
             data = np.array([i.split(' ') for i in data])
             # get strategy parameters
             dates = pd.to_datetime(data[:, 0], format = '%d/%m/%Y')
