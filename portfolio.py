@@ -508,7 +508,7 @@ if __name__ == '__main__':
                     portfolio._plot_monte_carlo()
                 if drawdown_analysis == 'Yes':
                     st.header('Drawdown analysis')
-                    st.markdown('Values above Q2 have 50% chance; values above Q3 + IQR are rare.')
+                    st.markdown('Q1, Q2 and Q3 are the 25th, 50th and 75th percentiles; values above Q3 + IQR are rare.')
                     portfolio._plot_dd_hist()
                 if len(portfolio.dict_strat) > 1:
                     if correlation_analysis == 'Yes':
@@ -520,5 +520,5 @@ if __name__ == '__main__':
                     portfolio._plot_prob_ruin()
                 if margin_analysis == 'Yes':
                     st.header('Margin analysis')
-                    st.markdown('Values above Q2 have 50% chance; values above Q3 + IQR are rare.')
+                    st.markdown('Q1, Q2 and Q3 are the 25th, 50th and 75th percentiles; values above Q3 + IQR are rare.')
                     portfolio._plot_margin_hist()
