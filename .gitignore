@@ -1,0 +1,7 @@
+reports/
+reports_crypto/
+data/
+mlruns/
+mlruns_backup/
+.ipynb_checkpoints/
+__pycache__/
