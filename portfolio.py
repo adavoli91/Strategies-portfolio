@@ -245,7 +245,7 @@ class Portfolio:
         #
         figure.add_trace(go.Scatter(x = df['date'].values, y = df['cum_profit'].values, mode = 'lines', line_color = 'blue'), row = 1, col = 1)
         figure.add_trace(go.Scatter(x = df['date'].values, y = df['dd'].values, mode = 'lines', line_color = 'blue'), row = 2, col = 1)
-        if agg_month == True:
+        if agg_month == 'Yes':
             figure.add_trace(go.Scatter(x = df_month['date'].values, y = df_month['cum_profit'].values, line = {'dash': 'dot', 'color': 'red'}), row = 1, col = 1)
             figure.add_trace(go.Scatter(x = df_month['date'].values, y = df_month['dd'].values, line = {'dash': 'dot', 'color': 'red'}), row = 2, col = 1)
         st.plotly_chart(figure)
