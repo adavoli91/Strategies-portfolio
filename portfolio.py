@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 import datetime
 import plotly.graph_objects as go
+import os
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score
 from plotly.subplots import make_subplots
@@ -12,15 +13,20 @@ dict_margin = {'AD': 3000, 'BP': 3000, 'C': 2000, 'CD': 3000, 'CL': 18000, 'EC':
 
 class Portfolio:
     def __init__(self):
-        # self.list_strategies = [i for i in os.listdir('./reports/') if '.txt' in i]
-        self.list_strategies = st.file_uploader('Upload strategies', accept_multiple_files = True, type = ['csv', 'txt'])
-        if (type(self.list_strategies) == list) and (len(self.list_strategies) > 0):
-            self.data = {}
+        self.data = {}
+        if 'my_portfolio.txt' not in os.listdir():
+            self.list_strategies = st.file_uploader('Upload strategies', accept_multiple_files = True, type = ['csv', 'txt'])
+            if (type(self.list_strategies) == list) and (len(self.list_strategies) > 0):
+                for strat in self.list_strategies:
+                    data = pd.read_csv(strat, delimiter = ' ', header = None).values
+                    self.data[strat.name] = data
+                self.list_strategies = [strat.name for strat in self.list_strategies]
+        else:
+            self.list_strategies = [i for i in os.listdir('./reports/') if '.txt' in i]
             for strat in self.list_strategies:
-                data = pd.read_csv(strat, delimiter = ' ', header = None).values
-                self.data[strat.name] = data
-            self.list_strategies = [strat.name for strat in self.list_strategies]
-            self.dict_margin = {}
+                data = pd.read_csv('./reports/' + strat, delimiter = ' ', header = None).values
+                self.data[strat] = data
+        self.dict_margin = {}
 
     def _compute_np_dd(self, daily_profit: np.array) -> tuple[np.array, np.array, np.array]:
         '''
@@ -146,7 +152,7 @@ class Portfolio:
         #
         self.dict_results = dict_results
 
-    def _portfolio_performance(self) -> pd.DataFrame:
+    def _portfolio_performance(self, perform_mc: bool = False) -> pd.DataFrame:
         '''
         Function to compute the performance of a portfolio.
         
@@ -173,13 +179,19 @@ class Portfolio:
             # adjust profit and margins by number of contracts
             df_temp['daily_profit'] *= n_contracts
             df_temp['margin'] *= n_contracts*np.sign(df_temp['curr_contract'])
+            if perform_mc == True:
+                shuffle_idx = np.random.choice(range(df_temp.shape[0]), df_temp.shape[0], replace = False)
+                df_temp['daily_profit'] = df_temp.loc[shuffle_idx, 'daily_profit'].values
+                df_temp['daily_profit'] *= (1 + np.random.rand(df_temp.shape[0])*0.2 - 0.1)
+                df_temp['margin'] = df_temp.loc[shuffle_idx, 'margin'].values
             # combine portfolio strategies
             df_temp.index = df_temp['date']
             df_portfolio[instrument].append(df_temp)
         #
         list_first_dates = np.unique([df_temp['date'].min() for list_df in df_portfolio.values() for df_temp in list_df])
         if list_first_dates.shape[0] > 1:
-            st.write(f'The backtest starts on {np.max(list_first_dates).strftime("%Y-%m-%d")} because that is the first available date of at least one strategy.')
+            if perform_mc == False:
+                st.write(f'The backtest starts on {np.max(list_first_dates).strftime("%Y-%m-%d")} because that is the first available date of at least one strategy.')
             for instr in df_portfolio.keys():
                 list_df = df_portfolio[instr]
                 for i in range(len(list_df)):
@@ -210,7 +222,10 @@ class Portfolio:
         # add portfolio cumulative statistics
         df_portfolio['cum_profit'], df_portfolio['max_equity'], df_portfolio['dd'] = self._compute_np_dd(df_portfolio['daily_profit'].values)
         #
-        self.df_portfolio = df_portfolio.reset_index(drop = True).sort_values(by = 'date')
+        if perform_mc == False:
+            self.df_portfolio = df_portfolio.reset_index(drop = True).sort_values(by = 'date')
+        else:
+            self.df_portfolio_mc = df_portfolio.reset_index(drop = True).sort_values(by = 'date')
 
     def _plot_profit(self):
         '''
@@ -281,12 +296,21 @@ class Portfolio:
         # R^2
         lr = LinearRegression().fit(np.arange(1, df.shape[0] + 1).reshape(-1, 1), df['cum_profit'])
         r_2 = r2_score(y_true = df['cum_profit'], y_pred = lr.coef_*np.arange(1, df.shape[0] + 1) + lr.intercept_)
+        # (average yearly NP)/DD
+        df_temp = df.copy()
+        df_temp = df_temp.dropna()
+        df_temp['year'] = df_temp['date'].dt.year
+        df_temp['weekday'] = df_temp['date'].dt.weekday
+        df_temp = df_temp[df_temp['weekday'] < 5].reset_index(drop = True)
+        df_temp = df_temp.groupby('year').agg({'daily_profit': 'sum', 'date': 'count'}).rename(columns = {'date': 'n_days'}).reset_index()
+        df_temp['weight'] = df_temp['n_days']/df_temp['n_days'].sum()
+        avg_np_dd = -(df_temp['daily_profit']*df_temp['weight']).sum()/df['dd'].min()
         #
-        df_metrics = pd.DataFrame([[net_profit, max_dd, np_dd, avg_dd, mean_duration_dd, r_2, -df_filt['dd'].min(), str(max_dd_recent)]])
-        df_metrics.columns = ['NP', 'Max DD', 'NP/DD', 'Avg. DD', 'Avg. DD duration [days]', 'R^2', 'Current DD', 'Currently max DD']
+        df_metrics = pd.DataFrame([[net_profit, max_dd, np_dd, avg_dd, mean_duration_dd, r_2, avg_np_dd, -df_filt['dd'].min(), str(max_dd_recent)]])
+        df_metrics.columns = ['NP', 'Max DD', 'NP/DD', 'Avg. DD', 'Avg. DD duration [days]', 'R^2', 'Avg. yearly NP/DD', 'Current DD', 'Currently max DD']
         #
         st.table(df_metrics.style.format({'NP': '{:.2f}', 'Max DD': '{:.2f}', 'NP/DD': '{:.2f}', 'Avg. DD': '{:.2f}', 'Avg. DD duration [days]': '{:.0f}',
-                                          'R^2': '{:.3f}', 'Current DD': '{:.2f}'}))
+                                          'R^2': '{:.3f}', 'Current DD': '{:.2f}', 'Avg. yearly NP/DD': '{:.1f}'}))
 
     def _plot_monte_carlo(self):
         '''
@@ -300,26 +324,116 @@ class Portfolio:
         #
         figure = make_subplots(rows = 2, cols = 1, shared_xaxes = True, row_heights = [0.67, 0.33], vertical_spacing = 0)
         figure.update_layout(go.Layout(margin = dict(l = 20, r = 20, t = 20, b = 20), template = 'simple_white', showlegend = False,
-                                    xaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickangle': -90},
-                                    yaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickformat': f'.{2}f', 'title': 'NP [$]'},
-                                    xaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickangle': -90},
-                                    yaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickformat': f'.{2}f', 'title': 'DD [$]'},
-                                    font = {'size': 28}, autosize = False, width = 900, height = 500, hovermode = 'closest'))
+                                       xaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickangle': -90},
+                                       yaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickformat': f'.{2}f', 'title': 'NP [$]'},
+                                       xaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickangle': -90},
+                                       yaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickformat': f'.{2}f', 'title': 'DD [$]'},
+                                       font = {'size': 28}, autosize = False, width = 900, height = 500, hovermode = 'closest'))
         #
+        list_mc = []
         for i in range(100):
-            df_temp = df.copy()
-            shuffle_idx = np.random.choice(range(df_temp.shape[0]), df_temp.shape[0], replace = False)
-            df_temp['daily_profit'] = df_temp.loc[shuffle_idx, 'daily_profit'].values
-            df_temp['cum_profit'], _, df_temp['dd'] = self._compute_np_dd(df_temp['daily_profit'])
+            # df_temp = df.copy()
+            # shuffle_idx = np.random.choice(range(df_temp.shape[0]), df_temp.shape[0], replace = False)
+            # df_temp['daily_profit'] = df_temp.loc[shuffle_idx, 'daily_profit'].values
+            # df_temp['daily_profit'] *= (1 + np.random.rand(df_temp.shape[0])*0.2 - 0.1)
+            # df_temp['cum_profit'], _, df_temp['dd'] = self._compute_np_dd(df_temp['daily_profit'])
+            self._portfolio_performance(perform_mc = True)
+            df_temp = self.df_portfolio_mc
+            list_mc.append(df_temp)
             figure.add_trace(go.Scatter(x = df_temp['date'].values, y = df_temp['cum_profit'].values, mode = 'lines', line_color = 'gray', opacity = 0.5), row = 1, col = 1)
             figure.add_trace(go.Scatter(x = df_temp['date'].values, y = df_temp['dd'].values, mode = 'lines', line_color = 'gray', opacity = 0.5), row = 2, col = 1)
         #
         figure.add_trace(go.Scatter(x = df['date'].values, y = df['cum_profit'].values, mode = 'lines', line_color = 'blue'), row = 1, col = 1)
         figure.add_trace(go.Scatter(x = df['date'].values, y = df['dd'].values, mode = 'lines', line_color = 'blue'), row = 2, col = 1)
+        st.plotly_chart(figure)
+        #
+        figure = make_subplots(rows = 2, cols = 2, vertical_spacing = 0.25, horizontal_spacing = 0.18)
+        figure.update_layout(go.Layout(margin = dict(l = 20, r = 20, t = 20, b = 20), template = 'simple_white', showlegend = False,
+                                    xaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16}, 'title': 'Iteration number'},
+                                    yaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                'tickformat': f'.{2}f', 'title': 'NP [$]'},
+                                    xaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16}, 'title': 'Iteration number'},
+                                    yaxis2 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                'tickformat': f'.{2}f', 'title': 'Max DD [$]'},
+                                    xaxis3 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16}, 'title': 'Iteration number'},
+                                    yaxis3 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                'tickformat': f'.{2}f', 'title': 'Avg. DD [$]'},
+                                    xaxis4 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16}, 'title': 'Iteration number'},
+                                    yaxis4 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                'tickformat': f'.{1}f', 'title': 'NP/DD'},
+                                    font = {'size': 28}, autosize = False, width = 1200, height = 600, hovermode = 'closest'))
+        #
+        list_np_mc = np.sort([i['cum_profit'].values[-1] for i in list_mc])
+        figure.add_trace(go.Scatter(x = np.arange(len(list_mc)), y = np.sort([i['cum_profit'].values[-1] for i in list_mc]), mode = 'lines', line_color = 'blue'), row = 1, col = 1)
+        figure.add_trace(go.Scatter(x = [np.argmin(abs(list_np_mc - df['cum_profit'].values[-1]))],
+                                    y = [df['cum_profit'].values[-1]], marker_color = 'red', marker_size = 10), row = 1, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.5)))],
+                                    y = [np.quantile(list_np_mc, 0.5)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dash'), row = 1, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.5)))/2, y = np.quantile(list_np_mc, 0.5), text = 'Q2', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.25)))],
+                                    y = [np.quantile(list_np_mc, 0.25)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 1, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.25)))/2, y = np.quantile(list_np_mc, 0.25), text = 'Q1', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.75)))],
+                                    y = [np.quantile(list_np_mc, 0.75)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 1, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_np_mc - np.quantile(list_np_mc, 0.75)))/2, y = np.quantile(list_np_mc, 0.75), text = 'Q3', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 1)
+        #
+        list_dd_mc = np.sort([-i['dd'].min() for i in list_mc])
+        figure.add_trace(go.Scatter(x = np.arange(len(list_mc)), y = np.sort([-i['dd'].min() for i in list_mc]), mode = 'lines', line_color = 'blue'), row = 1, col = 2)
+        figure.add_trace(go.Scatter(x = [np.argmin(abs(list_dd_mc - -df['dd'].min()))],
+                                    y = [-df['dd'].min()], marker_color = 'red', marker_size = 10), row = 1, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.5)))],
+                                    y = [np.quantile(list_dd_mc, 0.5)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dash'), row = 1, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.5)))/2, y = np.quantile(list_dd_mc, 0.5), text = 'Q2', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.25)))],
+                                    y = [np.quantile(list_dd_mc, 0.25)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 1, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.25)))/2, y = np.quantile(list_dd_mc, 0.25), text = 'Q1', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.75)))],
+                                    y = [np.quantile(list_dd_mc, 0.75)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 1, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_dd_mc - np.quantile(list_dd_mc, 0.75)))/2, y = np.quantile(list_dd_mc, 0.75), text = 'Q3', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 1, col = 2)
+        #
+        list_dd_avg_mc = np.sort([-i['dd'].mean() for i in list_mc])
+        figure.add_trace(go.Scatter(x = np.arange(len(list_mc)), y = np.sort([-i['dd'].mean() for i in list_mc]), mode = 'lines', line_color = 'blue'), row = 2, col = 1)
+        figure.add_trace(go.Scatter(x = [np.argmin(abs(list_dd_avg_mc - -df['dd'].mean()))],
+                                    y = [-df['dd'].mean()], marker_color = 'red', marker_size = 10), row = 2, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.5)))],
+                                    y = [np.quantile(list_dd_avg_mc, 0.5)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dash'), row = 2, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.5)))/2, y = np.quantile(list_dd_avg_mc, 0.5), text = 'Q2', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.25)))],
+                                    y = [np.quantile(list_dd_avg_mc, 0.25)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 2, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.25)))/2, y = np.quantile(list_dd_avg_mc, 0.25), text = 'Q1', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 1)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.75)))],
+                                    y = [np.quantile(list_dd_avg_mc, 0.75)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 2, col = 1)
+        figure.add_annotation(x = np.argmin(abs(list_dd_avg_mc - np.quantile(list_dd_avg_mc, 0.75)))/2, y = np.quantile(list_dd_avg_mc, 0.75), text = 'Q3', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 1)
+        #
+        list_np_dd_mc = np.sort([-i['cum_profit'].values[-1]/i['dd'].min() for i in list_mc])
+        figure.add_trace(go.Scatter(x = np.arange(len(list_mc)), y = list_np_dd_mc, mode = 'lines', line_color = 'blue'), row = 2, col = 2)
+        figure.add_trace(go.Scatter(x = [np.argmin(abs(list_np_dd_mc - -df['cum_profit'].values[-1]/df['dd'].min()))],
+                                    y = [-df['cum_profit'].values[-1]/df['dd'].min()], marker_color = 'red', marker_size = 10), row = 2, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.5)))],
+                                    y = [np.quantile(list_np_dd_mc, 0.5)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dash'), row = 2, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.5)))/2, y = np.quantile(list_np_dd_mc, 0.5), text = 'Q2', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.25)))],
+                                    y = [np.quantile(list_np_dd_mc, 0.25)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 2, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.25)))/2, y = np.quantile(list_np_dd_mc, 0.25), text = 'Q1', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 2)
+        figure.add_trace(go.Scatter(x = [0, np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.75)))],
+                                    y = [np.quantile(list_np_dd_mc, 0.75)]*2, mode = 'lines', line_color = 'grey', line_dash = 'dot'), row = 2, col = 2)
+        figure.add_annotation(x = np.argmin(abs(list_np_dd_mc - np.quantile(list_np_dd_mc, 0.75)))/2, y = np.quantile(list_np_dd_mc, 0.75), text = 'Q3', showarrow = False, yshift = 14,
+                            font = {'size': 14, 'color': 'gray'}, row = 2, col = 2)
         st.plotly_chart(figure)
         
     def _plot_dd_hist(self):
@@ -340,11 +454,11 @@ class Portfolio:
         #
         figure = go.Figure()
         figure.update_layout(go.Layout(margin = dict(l = 20, r = 20, t = 20, b = 20), template = 'simple_white', showlegend = False,
-                                    xaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickangle': 0, 'title': 'Daily drawdown [$]'},
-                                    yaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
-                                                'tickformat': f'.{0}f'},
-                                    font = {'size': 28}, autosize = False, width = 900, height = 500, hovermode = 'closest'))
+                                       xaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickangle': 0, 'title': 'Daily drawdown [$]'},
+                                       yaxis1 = {'showgrid': True, 'showline': True, 'mirror': True, 'titlefont': {'size': 20}, 'tickfont': {'size': 16},
+                                                 'tickformat': f'.{0}f'},
+                                       font = {'size': 28}, autosize = False, width = 900, height = 500, hovermode = 'closest'))
         figure.add_trace(go.Histogram(x = vals, marker_color = 'lime', opacity = 0.5))
         figure.add_vline(x = q_1, line_width = 2, line_dash = 'dash', line_color = 'blue', annotation_text = 'Q1',
                         annotation_position = 'top right', annotation = {'font_color': 'blue', 'font_size': 16, 'borderwidth': 10})
@@ -468,8 +582,11 @@ if __name__ == '__main__':
     with st.form(key='Main run'):
         if st.session_state.load != True:
             portfolio = Portfolio()
-            load = st.form_submit_button(label = 'Load strategies')
-            st.session_state.load = load
+            if 'my_portfolio.txt' not in os.listdir():
+                load = st.form_submit_button(label = 'Load strategies')
+                st.session_state.load = load
+            else:
+                st.session_state.load = True
             st.session_state.portfolio = portfolio
         if st.session_state.load == True:
             portfolio = st.session_state.portfolio

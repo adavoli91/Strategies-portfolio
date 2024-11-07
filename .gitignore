@@ -5,3 +5,4 @@ mlruns/
 mlruns_backup/
 .ipynb_checkpoints/
 __pycache__/
+my_portfolio.txt
